@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PV String Optimizer</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        .container { background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .input-group { margin-bottom: 15px; }
+        label { display: inline-block; width: 200px; margin-right: 10px; }
+        input[type="number"] { width: 100px; padding: 5px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
+        button:hover { background-color: #45a049; }
+        #result { margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .error { color: red; margin-top: 10px; }
+        .success { color: green; margin-top: 10px; }
+        .suggestion { color: #ff6600; margin-top: 10px; padding: 10px; background-color: #fff3e6; border-radius: 4px; }
+        .statistics { margin-top: 15px; padding: 10px; background-color: #e6f3ff; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PV String Optimizer</h1>
+    <div class="input-group">
+        <label for="totalPanels">Tổng số tấm PV:</label>
+        <input type="number" id="totalPanels" min="1" required>
+    </div>
+    <div class="input-group">
+        <label for="minPanels">Số tấm tối thiểu mỗi string:</label>
+        <input type="number" id="minPanels" value="15" min="1" required>
+    </div>
+    <div class="input-group">
+        <label for="maxPanels">Số tấm tối đa mỗi string:</label>
+        <input type="number" id="maxPanels" value="20" min="1" required>
+    </div>
+    <div class="input-group">
+        <label for="fixedPanels">Số tấm PV cố định (nếu có):</label>
+        <input type="number" id="fixedPanels" placeholder="17, 18, ...">
+    </div>
+    <button onclick="calculate()">Tính toán</button>
+    <button id="downloadBtn" onclick="downloadCSV()" disabled>Tải kết quả (CSV)</button>
+    <div id="result"></div>
+    <div id="statistics"></div>
+    <div id="suggestions"></div>
+</div>
+
+<script>
+let lastResult = null;
+
+function calculateStringStatistics(solution) {
+    const statistics = {};
+    solution.forEach(numPanels => {
+        statistics[numPanels] = (statistics[numPanels] || 0) + 1;
+    });
+    return statistics;
+}
+
+function displayStringStatistics(statistics) {
+    const statsDiv = document.getElementById('statistics');
+    let html = '<div class="statistics">';
+    html += '<h3>Thống kê số lượng string:</h3>';
+    
+    // Sắp xếp theo số tấm tăng dần
+    const sortedEntries = Object.entries(statistics).sort((a, b) => parseInt(a[0]) - parseInt(b[0]));
+    
+    sortedEntries.forEach(([panels, count]) => {
+        html += `<p>${count} string ${panels} tấm</p>`;
+    });
+    
+    html += '</div>';
+    statsDiv.innerHTML = html;
+}
+
+function findNearestOptimalConfigurations(totalPanels, minPanels, maxPanels) {
+    const suggestions = [];
+    let range = 1;
+    const maxRange = 10;
+
+    while (range <= maxRange && suggestions.length < 4) {
+        const solutionAdd = optimizePVStrings(totalPanels + range, minPanels, maxPanels);
+        if (solutionAdd.length > 0) {
+            suggestions.push({ panels: totalPanels + range, difference: range, solution: solutionAdd, type: 'add' });
+        }
+
+        const solutionSubtract = optimizePVStrings(totalPanels - range, minPanels, maxPanels);
+        if (solutionSubtract.length > 0) {
+            suggestions.push({ panels: totalPanels - range, difference: range, solution: solutionSubtract, type: 'subtract' });
+        }
+
+        range++;
+    }
+
+    return suggestions.slice(0, 4);
+}
+
+function optimizePVStrings(totalPanels, minPanels, maxPanels) {
+    if (totalPanels < minPanels) {
+        return [];
+    }
+
+    const fixedPanels = parseInt(document.getElementById('fixedPanels').value);
+    
+    if (!isNaN(fixedPanels) && fixedPanels >= minPanels && fixedPanels <= maxPanels) {
+        let remainingPanels = totalPanels - fixedPanels;
+        let solution = [fixedPanels];
+        
+        while (remainingPanels > 0) {
+            let panelsToAdd;
+            if (remainingPanels >= maxPanels) {
+                panelsToAdd = Math.floor(Math.random() * (maxPanels - minPanels + 1)) + minPanels;
+            } else if (remainingPanels >= minPanels) {
+                panelsToAdd = remainingPanels;
+            } else {
+                if (solution[solution.length - 1] + remainingPanels <= maxPanels) {
+                    solution[solution.length - 1] += remainingPanels;
+                } else {
+                    return [];
+                }
+                break;
+            }
+            
+            solution.push(panelsToAdd);
+            remainingPanels -= panelsToAdd;
+        }
+        
+        if (solution.every(x => x >= minPanels && x <= maxPanels)) {
+            return solution;
+        }
+    }
+
+    for (let numStrings = Math.floor(totalPanels / maxPanels); numStrings <= Math.ceil(totalPanels / minPanels); numStrings++) {
+        const basePanels = Math.floor(totalPanels / numStrings);
+        const remainder = totalPanels % numStrings;
+        
+        const solution = Array(numStrings).fill(basePanels);
+        for (let i = 0; i < remainder; i++) {
+            solution[i]++;
+        }
+        
+        if (solution.every(x => x >= minPanels && x <= maxPanels)) {
+            return solution;
+        }
+    }
+
+    return [];
+}
+
+function displaySuggestions(totalPanels, minPanels, maxPanels) {
+    const suggestions = findNearestOptimalConfigurations(totalPanels, minPanels, maxPanels);
+    const suggestionsDiv = document.getElementById('suggestions');
+
+    if (suggestions.length > 0) {
+        let html = '<div class="suggestion">';
+        html += '<h3>Gợi ý cấu hình tối ưu:</h3>';
+        
+        suggestions.forEach(suggestion => {
+            const diffText = suggestion.type === 'add' ? 'thêm' : 'bớt';
+            html += `<div class="suggestion-option">`;
+            html += `<p>Nếu ${diffText} ${suggestion.difference} tấm (tổng ${suggestion.panels} tấm):</p>`;
+            html += '<ul>';
+            
+            const stats = calculateStringStatistics(suggestion.solution);
+            Object.entries(stats).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).forEach(([panels, count]) => {
+                html += `<li>${count} string ${panels} tấm</li>`;
+            });
+            
+            html += '</ul>';
+            html += `<p>→ ${suggestion.solution.length} string</p>`;
+            html += '</div>';
+        });
+        
+        html += '</div>';
+        suggestionsDiv.innerHTML = html;
+    } else {
+        suggestionsDiv.innerHTML = '';
+    }
+}
+
+function calculate() {
+    const totalPanels = parseInt(document.getElementById('totalPanels').value);
+    const minPanels = parseInt(document.getElementById('minPanels').value);
+    const maxPanels = parseInt(document.getElementById('maxPanels').value);
+    
+    const resultDiv = document.getElementById('result');
+    const statisticsDiv = document.getElementById('statistics');
+    
+    if (!totalPanels || !minPanels || !maxPanels) {
+        resultDiv.innerHTML = '<p class="error">Vui lòng nhập đầy đủ thông tin!</p>';
+        statisticsDiv.innerHTML = '';
+        document.getElementById('downloadBtn').disabled = true;
+        return;
+    }
+
+    if (minPanels > maxPanels) {
+        resultDiv.innerHTML = '<p class="error">Số tấm tối thiểu không được lớn hơn số tấm tối đa!</p>';
+        statisticsDiv.innerHTML = '';
+        document.getElementById('downloadBtn').disabled = true;
+        return;
+    }
+
+    const solution = optimizePVStrings(totalPanels, minPanels, maxPanels);
+    lastResult = solution;
+
+    if (solution.length === 0) {
+        resultDiv.innerHTML = `<p class="error">Không thể phân chia ${totalPanels} tấm PV với các điều kiện đã cho!</p>`;
+        statisticsDiv.innerHTML = '';
+        document.getElementById('downloadBtn').disabled = true;
+        displaySuggestions(totalPanels, minPanels, maxPanels);
+        return;
+    }
+
+    let html = '<p class="success">Phương án phân chia hiện tại:</p>';
+    html += '<table>';
+    html += '<tr><th>String</th><th>Số tấm PV</th></tr>';
+
+    solution.forEach((numPanels, index) => {
+        html += `<tr><td>String ${index + 1}</td><td>${numPanels}</td></tr>`;
+    });
+
+    html += '</table>';
+    resultDiv.innerHTML = html;
+
+    // Hiển thị thống kê
+    const statistics = calculateStringStatistics(solution);
+    displayStringStatistics(statistics);
+
+    const maxNumPanels = Math.max(...solution);
+    const minNumPanels = Math.min(...solution);
+
+    if (maxNumPanels !== minNumPanels) {
+        displaySuggestions(totalPanels, minPanels, maxPanels);
+    } else {
+        document.getElementById('suggestions').innerHTML = '';
+    }
+
+    document.getElementById('downloadBtn').disabled = false;
+}
+
+function downloadCSV() {
+    if (!lastResult || lastResult.length === 0) return;
+
+    const totalPanels = document.getElementById('totalPanels').value;
+    const minPanels = document.getElementById('minPanels').value;
+    const maxPanels = document.getElementById('maxPanels').value;
+
+    let csv = 'Thông tin phân chia String PV\n';
+    csv += `Tổng số tấm PV,${totalPanels}\n`;
+    csv += `Số tấm tối thiểu,${minPanels}\n`;
+    csv += `Số tấm tối đa,${maxPanels}\n`;
+    
+    // Thêm thống kê vào CSV
+    const statistics = calculateStringStatistics(lastResult);
+    csv += '\nThống kê số lượng string:\n';
+    Object.entries(statistics).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).forEach(([panels, count]) => {
+        csv += `${count} string ${panels} tấm\n`;
+    });
+
+    csv += '\nKết quả phân chia chi tiết:\n';
+    csv += 'String,Số tấm PV\n';
+    lastResult.forEach((numPanels, index) => {
+        csv += `String ${index + 1},${numPanels}\n`;
+    });
+
+    const suggestions = findNearestOptimalConfigurations(parseInt(totalPanels), parseInt(minPanels), parseInt(maxPanels));
+    
+    if (suggestions.length > 0) {
+        csv += '\nGợi ý cấu hình tối ưu:\n';
+        
+        suggestions.forEach(suggestion => {
+            const diffText = suggestion.type === 'add' ? 'thêm' : 'bớt';
+            csv += `\nNếu ${diffText} ${suggestion.difference} tấm (tổng ${suggestion.panels} tấm):\n`;
+            
+            const suggestionStats = calculateStringStatistics(suggestion.solution);
+            Object.entries(suggestionStats).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).forEach(([panels, count]) => {
+                csv += `${count} string ${panels} tấm\n`;
+            });
+        });
+    }
+
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
+    const link = document.createElement('a');
+    link.setAttribute('href', URL.createObjectURL(blob));
+    link.setAttribute('download', 'pv_string_optimization.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+</script>
+</body>
+</html>
